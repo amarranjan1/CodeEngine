@@ -29,29 +29,35 @@ const LANGUAGES = {
     javascript: {
         extension: "js",
         runCmd: (filename, input) => os.platform() === "win32" 
-            ? `echo ${input} | node ${filename}`
-            : `echo \"${input}\" | node ${filename}`
+            ? `node ${filename} ${input}`
+            : `node ${filename} ${input}`
     },
     cpp: {
         extension: "cpp",
         compileCmd: (filename, output) => `g++ ${filename} -o ${output}`,
         runCmd: (output, input) => os.platform() === "win32" 
-            ? `echo ${input} | ${output}.exe`
-            : `echo \"${input}\" | ./${output}`
+            ? `${output}.exe`
+            : `./${output}`
     },
     c: {
         extension: "c",
         compileCmd: (filename, output) => `gcc ${filename} -o ${output}`,
         runCmd: (output, input) => os.platform() === "win32" 
-            ? `echo ${input} | ${output}.exe`
-            : `echo \"${input}\" | ./${output}`
+            ? `${output}.exe`
+            : `./${output}`
     },
     java: {
         extension: "java",
         compileCmd: (filename) => `javac ${filename}`,
         runCmd: (className, input) => os.platform() === "win32" 
-            ? `echo ${input} | java ${className}`
-            : `echo \"${input}\" | java ${className}`
+            ? `java ${className}`
+            : `java ${className}`
+    },
+    dart: {
+        extension: "dart",
+        runCmd: (filename, input) => os.platform() === "win32" 
+            ? `dart ${filename} ${input}`
+            : `dart ${filename} ${input}`
     }
 };
 
@@ -64,17 +70,31 @@ app.post("/execute", async (req, res) => {
         }
 
         const langConfig = LANGUAGES[language];
-        const filename = `temp.${langConfig.extension}`;
+        let filename = `temp.${langConfig.extension}`;
         const outputFile = `temp_out`;
 
+        // If the language is Java, check for public class name
+        if (language === "java") {
+            const classNameMatch = source_code.match(/public class (\w+)/);
+            if (classNameMatch) {
+                const className = classNameMatch[1];
+                filename = `${className}.java`; // Use the class name for the filename
+            }
+        }
+
         fs.writeFileSync(filename, source_code);
+        console.log(`Saved source code to ${filename}`);
 
         const executeCode = (testInput, callback) => {
             const startTime = performance.now();
 
             if (langConfig.compileCmd) {
-                exec(langConfig.compileCmd(filename, outputFile), (err, stderr) => {
+                const compileCommand = langConfig.compileCmd(filename, outputFile);
+                console.log(`Compiling with command: ${compileCommand}`);
+                
+                exec(compileCommand, (err, stderr) => {
                     if (err) {
+                        console.error(`Compilation error: ${stderr || err.message}`);
                         return callback(err, stderr, null);
                     }
 
@@ -82,6 +102,7 @@ app.post("/execute", async (req, res) => {
                         ? langConfig.runCmd(filename.replace(".java", ""), testInput)
                         : langConfig.runCmd(outputFile, testInput);
 
+                    console.log(`Running with command: ${runCmd}`);
                     exec(runCmd, (error, stdout, stderr) => {
                         const endTime = performance.now();
                         const executionTime = (endTime - startTime).toFixed(2);
@@ -89,7 +110,10 @@ app.post("/execute", async (req, res) => {
                     });
                 });
             } else {
-                exec(langConfig.runCmd(filename, testInput), (error, stdout, stderr) => {
+                const runCommand = langConfig.runCmd(filename, testInput);
+                console.log(`Running with command: ${runCommand}`);
+                
+                exec(runCommand, (error, stdout, stderr) => {
                     const endTime = performance.now();
                     const executionTime = (endTime - startTime).toFixed(2);
                     callback(error, stdout, stderr, executionTime);
@@ -133,18 +157,32 @@ app.post("/execute", async (req, res) => {
 
         executionHistory.push({ timestamp: new Date(), results });
 
-        fs.unlinkSync(filename);
+        // Clean up temporary files
+        try {
+            fs.unlinkSync(filename);
+            console.log(`Deleted temporary file: ${filename}`);
+        } catch (err) {
+            console.error(`Error deleting temporary file: ${err.message}`);
+        }
+
         if (langConfig.compileCmd) {
-            if (language === "java") {
-                fs.unlinkSync(filename.replace(".java", ".class"));
-            } else {
-                fs.unlinkSync(`${outputFile}${os.platform() === "win32" ? ".exe" : ""}`);
+            try {
+                if (language === "java") {
+                    fs.unlinkSync(filename.replace(".java", ".class"));
+                    console.log(`Deleted class file for Java: ${filename.replace(".java", ".class")}`);
+                } else {
+                    fs.unlinkSync(`${outputFile}${os.platform() === "win32" ? ".exe" : ""}`);
+                    console.log(`Deleted executable file: ${outputFile}${os.platform() === "win32" ? ".exe" : ""}`);
+                }
+            } catch (err) {
+                console.error(`Error deleting executable file: ${err.message}`);
             }
         }
 
         res.json({ status: "Success", results });
 
     } catch (err) {
+        console.error(`Error during execution: ${err.message}`);
         res.status(500).json({ status: "Error", error: err.message });
     }
 });
